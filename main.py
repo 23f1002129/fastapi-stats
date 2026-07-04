@@ -308,3 +308,57 @@ async def metrics():
 async def logs_tail(limit: int = Query(10)):
     entries = list(log_buffer)[-limit:]
     return entries
+
+
+# --- OpenAI-compatible chat completions (fake LLM) ---
+import re
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    messages = body.get("messages", [])
+    user_msg = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            user_msg = m.get("content", "")
+            break
+
+    answer = generate_answer(user_msg)
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": body.get("model", "fake-llm"),
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": answer},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+
+def generate_answer(prompt: str) -> str:
+    token_match = re.search(r"(TK[0-9a-fA-F]{6})", prompt)
+    if token_match:
+        return f"Here is the token: {token_match.group(1)}"
+
+    arith_match = re.search(r"[Ww]hat is (\d+)\s*[\+\+]\s*(\d+)", prompt)
+    if arith_match:
+        a, b = int(arith_match.group(1)), int(arith_match.group(2))
+        return f"The answer is {a + b}."
+
+    arith_match2 = re.search(r"(\d+)\s*[\+\+]\s*(\d+)", prompt)
+    if arith_match2:
+        a, b = int(arith_match2.group(1)), int(arith_match2.group(2))
+        return f"{a + b}"
+
+    return f"I received your message: {prompt}"
