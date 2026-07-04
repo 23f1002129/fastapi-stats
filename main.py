@@ -380,7 +380,11 @@ rate_limit_buckets = {}
 async def create_order(request: Request):
     client_id = request.headers.get("X-Client-Id", "default")
     if not _check_rate_limit(client_id):
-        return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"}, headers={"Retry-After": "10"})
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded"},
+            headers={"Retry-After": "10", "retry-after": "10"},
+        )
 
     idem_key = request.headers.get("Idempotency-Key", "")
 
@@ -405,7 +409,11 @@ async def create_order(request: Request):
 async def list_orders(request: Request, limit: int = Query(10), cursor: Optional[str] = Query(None)):
     client_id = request.headers.get("X-Client-Id", "default")
     if not _check_rate_limit(client_id):
-        return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"}, headers={"Retry-After": "10"})
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded"},
+            headers={"Retry-After": "10", "retry-after": "10"},
+        )
 
     start = 0
     if cursor:
