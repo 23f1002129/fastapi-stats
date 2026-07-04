@@ -1,11 +1,13 @@
 import os
 import time
 import uuid
+import json
 import jwt
 import redis
+from collections import deque
 from typing import List, Optional
 from fastapi import FastAPI, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 ALLOWED_ORIGIN = "https://dash-un67xt.example.com"
@@ -58,6 +60,31 @@ def coerce_value(key: str, value) -> object:
     return str(value)
 
 app = FastAPI()
+
+# --- Observability state ---
+STARTUP_TIME = time.time()
+http_requests_total = 0
+log_buffer = deque(maxlen=1000)
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    global http_requests_total
+    http_requests_total += 1
+
+    req_id = str(uuid.uuid4())
+    response = await call_next(request)
+
+    log_entry = {
+        "level": "info",
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "path": request.url.path,
+        "request_id": req_id,
+        "method": request.method,
+    }
+    log_buffer.append(log_entry)
+
+    return response
 
 
 @app.middleware("http")
@@ -210,7 +237,13 @@ async def count(key: str):
 
 
 @app.get("/healthz")
-async def healthz():
+async def healthz_main():
+    uptime = time.time() - STARTUP_TIME
+    return {"status": "ok", "uptime_s": round(uptime, 2)}
+
+
+@app.get("/redis-healthz")
+async def redis_healthz():
     try:
         redis_client.ping()
         return {"status": "ok", "redis": "up"}
@@ -253,3 +286,25 @@ async def analytics(request: Request):
         "revenue": revenue,
         "top_user": top_user,
     }
+
+
+# --- Prometheus & Observability endpoints ---
+@app.get("/work")
+async def work(n: int = Query(1)):
+    return {"email": EMAIL, "done": n}
+
+
+@app.get("/metrics")
+async def metrics():
+    body = (
+        "# HELP http_requests_total Total HTTP requests\n"
+        "# TYPE http_requests_total counter\n"
+        f"http_requests_total {http_requests_total}\n"
+    )
+    return PlainTextResponse(content=body, media_type="text/plain; version=0.0.4")
+
+
+@app.get("/logs/tail")
+async def logs_tail(limit: int = Query(10)):
+    entries = list(log_buffer)[-limit:]
+    return entries
