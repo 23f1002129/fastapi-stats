@@ -216,3 +216,40 @@ async def healthz():
         return {"status": "ok", "redis": "up"}
     except Exception:
         return JSONResponse(status_code=503, content={"status": "error", "redis": "down"})
+
+
+# --- Analytics endpoint ---
+API_KEY = "ak_3v2w1mj5jqijqlrtsr05z72v"
+
+
+@app.post("/analytics")
+async def analytics(request: Request):
+    key = request.headers.get("X-API-Key", "")
+    if key != API_KEY:
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    events = body.get("events", [])
+    total_events = len(events)
+    unique_users = len(set(e["user"] for e in events))
+
+    revenue = sum(e["amount"] for e in events if e["amount"] > 0)
+
+    user_totals = {}
+    for e in events:
+        if e["amount"] > 0:
+            user_totals[e["user"]] = user_totals.get(e["user"], 0) + e["amount"]
+
+    top_user = max(user_totals, key=user_totals.get) if user_totals else ""
+
+    return {
+        "email": EMAIL,
+        "total_events": total_events,
+        "unique_users": unique_users,
+        "revenue": revenue,
+        "top_user": top_user,
+    }
