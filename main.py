@@ -362,3 +362,79 @@ def generate_answer(prompt: str) -> str:
         return f"{a + b}"
 
     return f"I received your message: {prompt}"
+
+
+# --- Orders API: idempotency, pagination, rate limiting ---
+import base64
+
+TOTAL_ORDERS = 60
+RATE_LIMIT = 16
+RATE_WINDOW = 10
+
+orders_catalog = [{"id": i, "item": f"order-{i}", "status": "completed"} for i in range(1, TOTAL_ORDERS + 1)]
+idempotency_store = {}
+rate_limit_buckets = {}
+
+
+@app.post("/orders")
+async def create_order(request: Request):
+    client_id = request.headers.get("X-Client-Id", "default")
+    if not _check_rate_limit(client_id):
+        return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"}, headers={"Retry-After": "10"})
+
+    idem_key = request.headers.get("Idempotency-Key", "")
+
+    if idem_key and idem_key in idempotency_store:
+        return JSONResponse(status_code=201, content=idempotency_store[idem_key])
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    order_id = str(uuid.uuid4())
+    order = {"id": order_id, "item": body.get("item", "unknown"), "status": "created"}
+
+    if idem_key:
+        idempotency_store[idem_key] = order
+
+    return JSONResponse(status_code=201, content=order)
+
+
+@app.get("/orders")
+async def list_orders(request: Request, limit: int = Query(10), cursor: Optional[str] = Query(None)):
+    client_id = request.headers.get("X-Client-Id", "default")
+    if not _check_rate_limit(client_id):
+        return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"}, headers={"Retry-After": "10"})
+
+    start = 0
+    if cursor:
+        try:
+            start = int(base64.b64decode(cursor).decode())
+        except Exception:
+            start = 0
+
+    end = min(start + limit, TOTAL_ORDERS)
+    items = orders_catalog[start:end]
+
+    next_cursor = None
+    if end < TOTAL_ORDERS:
+        next_cursor = base64.b64encode(str(end).encode()).decode()
+
+    return {"items": items, "next_cursor": next_cursor}
+
+
+def _check_rate_limit(client_id: str) -> bool:
+    now = time.time()
+    if client_id not in rate_limit_buckets:
+        rate_limit_buckets[client_id] = []
+
+    bucket = rate_limit_buckets[client_id]
+    window_start = now - RATE_WINDOW
+    rate_limit_buckets[client_id] = [t for t in bucket if t > window_start]
+
+    if len(rate_limit_buckets[client_id]) >= RATE_LIMIT:
+        return False
+
+    rate_limit_buckets[client_id].append(now)
+    return True
