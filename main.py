@@ -60,10 +60,16 @@ class TokenRequest(BaseModel):
 
 
 @app.post("/verify")
-async def verify(body: TokenRequest):
+async def verify(request: Request):
+    try:
+        body = await request.json()
+        token = body.get("token", "")
+    except Exception:
+        return JSONResponse(status_code=401, content={"valid": False})
+
     try:
         payload = jwt.decode(
-            body.token,
+            token,
             PUBLIC_KEY,
             algorithms=["RS256"],
             issuer=ISSUER,
@@ -79,9 +85,7 @@ async def verify(body: TokenRequest):
                 "aud": payload.get("aud", ""),
             },
         )
-    except (jwt.ExpiredSignatureError, jwt.InvalidAudienceError,
-            jwt.InvalidIssuerError, jwt.InvalidSignatureError,
-            jwt.DecodeError, jwt.InvalidTokenError, Exception):
+    except Exception:
         return JSONResponse(
             status_code=401,
             content={"valid": False},
