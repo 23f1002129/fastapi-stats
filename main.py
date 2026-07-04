@@ -262,7 +262,12 @@ async def count(key: str):
 @app.get("/healthz")
 async def healthz_main():
     uptime = time.time() - STARTUP_TIME
-    return {"status": "ok", "uptime_s": round(uptime, 2)}
+    try:
+        redis_client.ping()
+        redis_status = "up"
+    except Exception:
+        redis_status = "down"
+    return {"status": "ok", "uptime_s": round(uptime, 2), "redis": redis_status}
 
 
 @app.get("/redis-healthz")
@@ -406,7 +411,7 @@ async def create_order(request: Request):
         return JSONResponse(
             status_code=429,
             content={"error": "Rate limit exceeded"},
-            headers={"Retry-After": "10", "retry-after": "10"},
+            headers={"Retry-After": "10"},
         )
 
     idem_key = request.headers.get("Idempotency-Key", "")
@@ -435,7 +440,7 @@ async def list_orders(request: Request, limit: int = Query(10), cursor: Optional
         return JSONResponse(
             status_code=429,
             content={"error": "Rate limit exceeded"},
-            headers={"Retry-After": "10", "retry-after": "10"},
+            headers={"Retry-After": "10"},
         )
 
     start = 0
