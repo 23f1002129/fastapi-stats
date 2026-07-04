@@ -87,6 +87,12 @@ async def observability_middleware(request: Request, call_next):
     return response
 
 
+PING_ALLOWED_ORIGIN = "https://app-9e2p1y.example.com"
+PING_RATE_LIMIT = 12
+PING_RATE_WINDOW = 10
+ping_rate_buckets = {}
+
+
 @app.middleware("http")
 async def cors_middleware(request: Request, call_next):
     origin = request.headers.get("origin", "")
@@ -99,6 +105,19 @@ async def cors_middleware(request: Request, call_next):
                     status_code=200,
                     headers={
                         "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+                        "Access-Control-Allow-Methods": "GET, OPTIONS",
+                        "Access-Control-Allow-Headers": "*",
+                        "Access-Control-Max-Age": "600",
+                    },
+                )
+            else:
+                return Response(status_code=400, content="Disallowed CORS origin")
+        elif path == "/ping":
+            if origin == PING_ALLOWED_ORIGIN:
+                return Response(
+                    status_code=200,
+                    headers={
+                        "Access-Control-Allow-Origin": PING_ALLOWED_ORIGIN,
                         "Access-Control-Allow-Methods": "GET, OPTIONS",
                         "Access-Control-Allow-Headers": "*",
                         "Access-Control-Max-Age": "600",
@@ -122,6 +141,9 @@ async def cors_middleware(request: Request, call_next):
     if path == "/stats":
         if origin == ALLOWED_ORIGIN:
             response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    elif path == "/ping":
+        if origin == PING_ALLOWED_ORIGIN:
+            response.headers["Access-Control-Allow-Origin"] = PING_ALLOWED_ORIGIN
     else:
         response.headers["Access-Control-Allow-Origin"] = "*"
 
@@ -133,7 +155,8 @@ async def add_custom_headers(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     process_time = time.perf_counter() - start
-    response.headers["X-Request-ID"] = str(uuid.uuid4())
+    if "X-Request-ID" not in response.headers:
+        response.headers["X-Request-ID"] = str(uuid.uuid4())
     response.headers["X-Process-Time"] = f"{process_time:.6f}"
     return response
 
@@ -446,3 +469,38 @@ def _check_rate_limit(client_id: str) -> bool:
 
     rate_limit_buckets[client_id].append(now)
     return True
+
+
+# --- /ping endpoint with request context + rate limiting ---
+def _check_ping_rate_limit(client_id: str) -> bool:
+    now = time.time()
+    if client_id not in ping_rate_buckets:
+        ping_rate_buckets[client_id] = []
+
+    window_start = now - PING_RATE_WINDOW
+    ping_rate_buckets[client_id] = [t for t in ping_rate_buckets[client_id] if t > window_start]
+
+    if len(ping_rate_buckets[client_id]) >= PING_RATE_LIMIT:
+        return False
+
+    ping_rate_buckets[client_id].append(now)
+    return True
+
+
+@app.get("/ping")
+async def ping(request: Request):
+    client_id = request.headers.get("X-Client-Id", "default")
+    if not _check_ping_rate_limit(client_id):
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded"},
+            headers={"Retry-After": "10"},
+        )
+
+    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+    return JSONResponse(
+        status_code=200,
+        content={"email": EMAIL, "request_id": req_id},
+        headers={"X-Request-ID": req_id},
+    )
