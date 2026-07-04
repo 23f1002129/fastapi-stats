@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 import jwt
+import redis
 from typing import List, Optional
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -189,3 +190,29 @@ async def effective_config(request: Request, set: Optional[List[str]] = Query(No
     result["api_key"] = "****"
 
     return result
+
+
+# --- Redis-backed endpoints ---
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+
+@app.post("/hit/{key}")
+async def hit(key: str):
+    count = redis_client.incr(key)
+    return {"key": key, "count": count}
+
+
+@app.get("/count/{key}")
+async def count(key: str):
+    val = redis_client.get(key)
+    return {"key": key, "count": int(val) if val else 0}
+
+
+@app.get("/healthz")
+async def healthz():
+    try:
+        redis_client.ping()
+        return {"status": "ok", "redis": "up"}
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "error", "redis": "down"})
